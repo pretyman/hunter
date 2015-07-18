@@ -49,6 +49,8 @@ string(COMPARE EQUAL "@CMAKE_OSX_SYSROOT@" "iphoneos" _is_iphoneos)
 string(COMPARE NOTEQUAL "@ANDROID@" "" _is_android)
 string(COMPARE EQUAL "@CMAKE_SYSTEM_NAME@" "Linux" _is_linux)
 string(COMPARE EQUAL "@CMAKE_SYSTEM_NAME@" "Darwin" _is_darwin)
+string(COMPARE NOTEQUAL "@CROSS_COMPILE_TOOLCHAIN_PREFIX@" "" _is_cross_compile)
+
 #insert windows test here
 if(_is_iphoneos)
   list(APPEND
@@ -81,6 +83,24 @@ elseif(_is_android)
       -skip qtserialport
       -skip qtwebkit-examples
       -no-warnings-are-errors
+  )
+elseif(_is_cross_compile)
+# AWP: for now this target is for the Raspberry Pi
+# We will likely need a special if just for the Pi
+# because of the -device option below
+  list(APPEND
+      configure_opts
+        -release
+        -opengl es2
+        -optimized-qmake
+        -no-pch
+        -make libs
+        -make tools
+#        -reduce-relocations #AWP: This was available in the gcc 4.8.x toolchain, but not in 4.9.x
+        -reduce-exports
+        -sysroot "@CROSS_COMPILE_SYSROOT@"
+        -device linux-rasp-pi-g++
+        -device-option CROSS_COMPILE=@CROSS_COMPILE_TOOLCHAIN_PATH@/@CROSS_COMPILE_TOOLCHAIN_PREFIX@-
   )
 elseif(_is_darwin)
   list(APPEND
