@@ -105,6 +105,27 @@ find_program(
       "${ODB-COMPILER_ROOT}/bin"
 )
 
+function(get_all_dependencies_property result target property)
+  set(properties)
+  get_target_property(dependencies ${target} INTERFACE_LINK_LIBRARIES)
+  foreach(dependency ${dependencies})
+    message("Examining: ${dependency}")
+    if(TARGET ${dependency})
+      set(child_attribute)
+      message("Is a target: ${dependency}")
+      get_all_dependencies_property(child_attribute ${dependency} ${property})
+      list(APPEND properties ${child_attribute})
+    else()
+      message("Not a target: ${dependency}")
+      list(APPEND properties ${dependency})
+    endif()
+  endforeach()
+  get_target_property(target_prop ${target} ${property})
+  list(APPEND properties ${target_prop})
+  list(REMOVE_DUPLICATES properties)
+  set(${result} ${properties} PARENT_SCOPE)
+endfunction()
+
 hunter_status_debug("ODB_COMPILER: ${ODB_COMPILER}")
 
 if(NOT ODB_COMPILER)
@@ -286,7 +307,6 @@ function(odb_compile _target)
     list(APPEND ODB_ARGS --profile "${PARAM_PROFILE}")
   endif()
 
-  list(APPEND ODB_ARGS --output-dir "${ODB_COMPILE_OUTPUT_DIR}")
   list(APPEND ODB_ARGS --hxx-suffix "${ODB_COMPILE_HEADER_SUFFIX}")
   list(APPEND ODB_ARGS --ixx-suffix "${ODB_COMPILE_INLINE_SUFFIX}")
   list(APPEND ODB_ARGS --cxx-suffix "${ODB_COMPILE_SOURCE_SUFFIX}")
@@ -311,34 +331,95 @@ function(odb_compile _target)
     list(APPEND ODB_ARGS "-I${dir}")
   endforeach()
 
+
+  set(
+      compiler_opt_file_name
+      "${CMAKE_CURRENT_BINARY_DIR}/target-${_target}-odb-compiler-options"
+  )
+
   file(REMOVE_RECURSE "${ODB_COMPILE_OUTPUT_DIR}")
   file(MAKE_DIRECTORY "${ODB_COMPILE_OUTPUT_DIR}")
 
   #AWP: TODO: add contents of *-file param as dependencies of custom_command
   set(generated_source_files)
   foreach(input ${PARAM_FILES})
+    hunter_status_debug("input: ${input}")
     get_filename_component(fname "${input}" NAME_WE)
+    hunter_status_debug("fname: ${fname}")
+    get_filename_component(input_file_dir "${input}" DIRECTORY)
+    hunter_status_debug("input_file_dir: ${input_file_dir}")
+    string(REPLACE
+        "${CMAKE_CURRENT_SOURCE_DIR}/"
+        ""
+        include_prefix
+        "${input_file_dir}"
+    )
+    set(output_dir
+        "${ODB_COMPILE_OUTPUT_DIR}/${include_prefix}"
+    )
+    set(cmake_script_dir
+        "${CMAKE_CURRENT_BIN_DIR}/${include_prefix}"
+    )
+    hunter_status_debug("cmake_script_dir: ${cmake_script_dir}")
+    file(MAKE_DIRECTORY "${cmake_script_dir}")
+    set(cmake_script_file
+        "${cmake_script_dir}/${fname}.cmake"
+    )
     set(outputs)
-
     foreach(sfx ${ODB_COMPILE_FILE_SUFFIX})
       string(REGEX REPLACE ":.*$" "" pfx "${sfx}")
       string(REGEX REPLACE "^.*:" "" sfx "${sfx}")
 
       if(NOT "${PARAM_MULTI_DATABASE}" MATCHES "static" OR NOT "${pfx}" MATCHES "common")
-        set(output "${ODB_COMPILE_OUTPUT_DIR}/${fname}${sfx}${ODB_COMPILE_SOURCE_SUFFIX}")
+        set(output "${output_dir}/${fname}${sfx}${ODB_COMPILE_SOURCE_SUFFIX}")
         list(APPEND outputs "${output}")
         list(APPEND generated_source_files "${output}")
       endif()
     endforeach()
 
+    set(input_specific_args)
+    list(APPEND
+        input_specific_args
+        --output-dir
+        "${output_dir}"
+    )
+    list(APPEND
+        input_specific_args
+        --include-prefix
+        "${include_prefix}"
+    )
+
+    set(odb_command_line
+        "${ODB_COMPILER} ${ODB_ARGS} ${input_specific_args}"
+    )
+
+    set(odb_command_line
+        "${odb_command_line} $<$<BOOL:$<TARGET_PROPERTY:${_target},INCLUDE_DIRECTORIES>>:-I$<JOIN:$<TARGET_PROPERTY:${_target},INCLUDE_DIRECTORIES>, -I>>"
+    )
+    set(odb_command_line
+        "${odb_command_line} $<$<BOOL:$<TARGET_PROPERTY:${_target},COMPILE_DEFINITIONS>>:-D$<JOIN:$<TARGET_PROPERTY:${_target},COMPILE_DEFINITIONS>, -D>>"
+    )
+    set(odb_command_line
+        "${odb_command_line} ${input}"
+    )
     if(HUNTER_STATUS_DEBUG)
-      set(_msg "${ODB_COMPILER} ${ODB_ARGS} ${input}")
-      string(REPLACE ";" " " _msg "${_msg}")
-      hunter_status_debug("ODB_COMPILE_OPTIONS: ${_msg}")
+      string(REPLACE ";" " " _msg "${odb_command_line}")
+      hunter_status_debug("ODB_COMMAND_LINE: ${_msg}")
     endif()
 
-    add_custom_command(OUTPUT ${outputs}
-      COMMAND ${ODB_COMPILER} ${ODB_ARGS} "${input}"
+    file(GENERATE
+      OUTPUT
+      "${cmake_script_file}"
+      CONTENT
+      "${odb_command_line}"
+  )
+   add_custom_command(OUTPUT ${outputs}
+      COMMAND
+          ${ODB_COMPILER}
+          ${ODB_ARGS}
+          "$<$<BOOL:$<TARGET_PROPERTY:${_target},INCLUDE_DIRECTORIES>>:-I$<JOIN:$<TARGET_PROPERTY:${_target},INCLUDE_DIRECTORIES>,\" -G>>"
+          $<$<BOOL:$<TARGET_PROPERTY:${_target},COMPILE_DEFINITIONS>>:-D$<JOIN:$<TARGET_PROPERTY:${_target},COMPILE_DEFINITIONS>,\ -D>>
+          ${input_specific_args} "${input}"
       DEPENDS "${input}"
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
       VERBATIM
